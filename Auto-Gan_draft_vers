@@ -1,0 +1,148 @@
+# Combining Autoencoders and GANs involves training both models simultaneously. The Autoencoder is responsible for reconstructing input images, while the GAN ensures that the generated images from random noise are realistic. Below is a simplified example of combining Autoencoders and GANs in Keras:
+
+# ```python
+import os
+import cv2
+import numpy as np
+from PIL import Image
+from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, UpSampling2D, Dense, Reshape, Flatten
+from tensorflow.keras.models import Model
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.losses import binary_crossentropy
+from tensorflow.keras.datasets import mnist  # Example dataset, replace with your data
+import matplotlib.pyplot as plt
+
+# Function to load face images from a folder
+def load_faces_from_folder(folder_path):
+    faces = []
+    for filename in os.listdir(folder_path):
+        img_path = os.path.join(folder_path, filename)
+        face_image = Image.open(img_path)
+        face_array = np.array(face_image.resize((128, 128))) / 255.0  # Normalize pixel values
+        faces.append(face_array)
+    return np.array(faces)
+
+# Function to build the autoencoder
+def build_autoencoder(input_shape):
+    input_img = Input(shape=input_shape)
+
+    x = Conv2D(32, (3, 3), activation='relu', padding='same')(input_img)
+    x = MaxPooling2D((2, 2), padding='same')(x)
+    x = Conv2D(64, (3, 3), activation='relu', padding='same')(x)
+    x = MaxPooling2D((2, 2), padding='same')(x)
+    x = Conv2D(128, (3, 3), activation='relu', padding='same')(x)
+    encoded = MaxPooling2D((2, 2), padding='same')(x)
+
+    # Decoder
+    x = Conv2D(128, (3, 3), activation='relu', padding='same')(encoded)
+    x = UpSampling2D((2, 2))(x)
+    x = Conv2D(64, (3, 3), activation='relu', padding='same')(x)
+    x = UpSampling2D((2, 2))(x)
+    x = Conv2D(32, (3, 3), activation='relu', padding='same')(x)
+    x = UpSampling2D((2, 2))(x)
+    decoded = Conv2D(3, (3, 3), activation='sigmoid', padding='same')(x)
+
+    autoencoder = Model(input_img, decoded)
+    autoencoder.compile(optimizer='adam', loss='mean_squared_error')
+
+    return autoencoder
+
+# Function to build the generator for GAN
+def build_generator(latent_dim, img_shape):
+    model_input = Input(shape=(latent_dim,))
+
+    # Adjust the following line based on the desired output shape
+    x = Dense(32 * 32 * 64, activation='relu')(model_input)
+    x = Reshape((32, 32, 64))(x)
+
+    x = Conv2D(128, (3, 3), activation='relu', padding='same')(x)
+    x = UpSampling2D((2, 2))(x)
+    x = Conv2D(64, (3, 3), activation='relu', padding='same')(x)
+    x = UpSampling2D((2, 2))(x)
+    generated_img = Conv2D(3, (3, 3), activation='sigmoid', padding='same')(x)
+
+    generator = Model(model_input, generated_img)
+    return generator
+
+# Function to build the discriminator for GAN
+def build_discriminator(img_shape):
+    model_input = Input(shape=img_shape)
+    x = Conv2D(64, (3, 3), strides=(2, 2), padding='same', activation='relu')(model_input)
+    x = Conv2D(128, (3, 3), strides=(2, 2), padding='same', activation='relu')(x)
+    x = Flatten()(x)
+    x = Dense(1, activation='sigmoid')(x)
+
+    discriminator = Model(model_input, x)
+    discriminator.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+    return discriminator
+
+# Function to build the GAN model
+# Function to build the GAN model
+def build_gan(generator, discriminator, autoencoder, latent_dim):
+    discriminator.trainable = False
+
+    gan_input = Input(shape=(latent_dim,))
+    generated_img = generator(gan_input)
+    validity = discriminator(autoencoder(generated_img))
+
+    gan = Model(gan_input, validity)
+    gan.compile(optimizer='adam', loss='binary_crossentropy')
+
+    return gan
+
+
+# Function to train Autoencoder-GAN
+def train_autoencoder_gan(autoencoder, generator, discriminator, gan, x_train, epochs=100, batch_size=128):
+    latent_dim = 100  # Adjust based on your requirements
+
+    # Training loop
+    for epoch in range(epochs):
+        idx = np.random.randint(0, x_train.shape[0], batch_size)
+        real_imgs = x_train[idx]
+
+        # Generate random noise as input to the generator
+        noise = np.random.normal(0, 1, (batch_size, latent_dim))
+        generated_imgs = generator.predict(noise)
+
+        # Train discriminator
+        d_loss_real = discriminator.train_on_batch(real_imgs, np.ones((batch_size, 1)))
+        d_loss_fake = discriminator.train_on_batch(generated_imgs, np.zeros((batch_size, 1)))
+        d_loss = 0.5 * np.add(d_loss_real, d_loss_fake)
+
+        # Train generator (via the gan model)
+        noise = np.random.normal(0, 1, (batch_size, latent_dim))
+        valid_y = np.array([1] * batch_size)
+        g_loss = gan.train_on_batch(noise, valid_y)
+
+        # Print progress
+        print(f"Epoch {epoch}/{epochs} [D loss: {d_loss[0]} | D accuracy: {100 * d_loss[1]}] [G loss: {g_loss}]")
+if __name__ == "__main__":
+    # Specify the output folder containing the face images
+    faces_folder = "/content/drive/MyDrive/dataset_major/dataset"   # Change this to your actual output folder
+
+    # Load face images
+    faces = load_faces_from_folder(faces_folder)
+
+    # Build Autoencoder, Generator, Discriminator, and GAN
+    autoencoder = build_autoencoder(input_shape=(128, 128, 3))
+    generator = build_generator(latent_dim=100, img_shape=(128, 128, 3))
+    discriminator = build_discriminator(img_shape=(128, 128, 3))
+    gan = build_gan(generator, discriminator, autoencoder, latent_dim=100)
+
+    # Train Autoencoder-GAN
+    train_autoencoder_gan(autoencoder, generator, discriminator, gan, faces, epochs=5, batch_size=128)
+
+    # Generate some images using the trained generator
+    num_generated_images = 5
+    latent_dim = 100
+    noise = np.random.normal(0, 1, (num_generated_images, latent_dim))
+    generated_images = generator.predict(noise)
+
+    # Display the generated images
+    fig, axes = plt.subplots(1, num_generated_images, figsize=(15, 3))
+    for i in range(num_generated_images):
+        axes[i].imshow(generated_images[i])
+        axes[i].axis('off')
+        axes[i].set_title(f"Generated Image {i+1}")
+
+    plt.show()
